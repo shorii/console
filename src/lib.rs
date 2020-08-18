@@ -52,7 +52,7 @@ pub struct Console {
 
 impl Console {
     pub fn new(render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>, keyboard: Box<dyn Keyboard>) -> Self {
-        let rustbox = Arc::new(Mutex::new(RustBox::init(Default::default()).unwrap()));
+        let rustbox = Arc::new(RustBox::init(Default::default()).unwrap());
 
         let renderer = Renderer::new(
             Arc::clone(&rustbox),
@@ -93,20 +93,19 @@ impl Console {
 }
 
 struct EventListener {
-    rustbox: Arc<Mutex<RustBox>>,
+    rustbox: Arc<RustBox>,
     keyboard: Box<dyn Keyboard>,
     listener_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl EventListener {
-    fn new(rustbox: Arc<Mutex<RustBox>>, keyboard: Box<dyn Keyboard>) -> Self{
+    fn new(rustbox: Arc<RustBox>, keyboard: Box<dyn Keyboard>) -> Self{
         let listener_thread: Option<thread::JoinHandle<()>> = None;
         EventListener { rustbox, keyboard, listener_thread }
     }
 
     fn run(&self) {
-        let rustbox = self.rustbox.lock().unwrap();
-        match rustbox.poll_event(false) {
+        match self.rustbox.poll_event(false) {
             Ok(rustbox::Event::KeyEvent(key)) => {
                 match key {
                     Key::Char(a) => {
@@ -121,23 +120,22 @@ impl EventListener {
 }
 
 struct Renderer {
-    rustbox: Arc<Mutex<RustBox>>,
+    rustbox: Arc<RustBox>,
     render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>,
 }
 
 impl Renderer {
-    fn new(rustbox: Arc<Mutex<RustBox>>, render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>) -> Self{
+    fn new(rustbox: Arc<RustBox>, render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>) -> Self{
         Renderer { rustbox, render_bus }
     }
 
     fn run(&self) {
         let render_bus = self.render_bus.lock().unwrap();
-        match render_bus.recv() {
+        match render_bus.try_recv() {
             Ok(graphic) => {
-                let rb = self.rustbox.lock().unwrap();
                 for (ridx, row) in graphic.enumerate() {
                     for (cidx, column) in row.iter().enumerate() {
-                        rb.print(
+                        self.rustbox.print(
                             cidx,
                             ridx,
                             rustbox::RB_BOLD,
@@ -150,9 +148,9 @@ impl Renderer {
                         );
                     }
                 }
-                rb.present();
+                self.rustbox.present();
             },
-            Err(_) => panic!("cannot draw graphic")
+            Err(_) => {/* do nothing */}
         }
     }
 }
