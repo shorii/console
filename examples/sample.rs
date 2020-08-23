@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 use rand::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 struct Screen {
     gfx: [u8; 192],
@@ -40,18 +41,20 @@ impl Screen {
 struct ScreenRunner {
     inner: Arc<Screen>,
     handle: Option<thread::JoinHandle<()>>,
+    terminated: Arc<AtomicBool>,
 }
 
 impl ScreenRunner {
-    fn new(screen: Screen) -> Self {
+    fn new(screen: Screen, terminated: Arc<AtomicBool>) -> Self {
         let handle: Option<thread::JoinHandle<()>> = None;
-        ScreenRunner { inner: Arc::new(screen), handle }
+        ScreenRunner { inner: Arc::new(screen), handle, terminated }
     }
 
     fn run(&mut self) {
         let local_self = Arc::clone(&self.inner);
+        let terminated = Arc::clone(&self.terminated);
         let handle = thread::spawn(move || {
-            loop {
+            while !terminated.load(Ordering::Relaxed) {
                 local_self.run();
             }
         });
@@ -93,6 +96,8 @@ impl Keyboard for Keypad {
 }
 
 fn main() {
+    let terminated = Arc::new(AtomicBool::new(false));
+
     let (key_event_sender, key_event_receiver) = mpsc::channel();
     let key_event_sender = Arc::new(Mutex::new(key_event_sender));
     let key_event_receiver = Arc::new(Mutex::new(key_event_receiver));
@@ -102,12 +107,16 @@ fn main() {
     let graphic_receiver = Arc::new(Mutex::new(graphic_receiver));
 
     let screen = Screen::new(key_event_receiver, graphic_sender);
-    let mut screen_runner = ScreenRunner::new(screen);
+    let mut screen_runner = ScreenRunner::new(
+        screen, Arc::clone(&terminated),
+    );
     screen_runner.run();
 
     let keypad = Keypad::new(key_event_sender);
     
-    let mut console = Console::new(graphic_receiver, Box::new(keypad)).unwrap();
+    let mut console = Console::new(
+        graphic_receiver, Box::new(keypad), Arc::clone(&terminated),
+    ).unwrap();
     console.run();
     console.join();
     screen_runner.join();

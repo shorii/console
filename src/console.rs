@@ -25,7 +25,11 @@ pub struct Console {
 }
 
 impl Console {
-    pub fn new(render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>, keyboard: Box<dyn Keyboard>) -> Result<Self, Error> {
+    pub fn new(
+        render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>,
+        keyboard: Box<dyn Keyboard>,
+        terminated: Arc<AtomicBool>
+    ) -> Result<Self, Error> {
         let rustbox = Arc::new(RustBox::init(Default::default()).unwrap());
 
         let renderer = Renderer::new(
@@ -38,7 +42,6 @@ impl Console {
 
         let handles = Vec::new();
 
-        let terminated = Arc::new(AtomicBool::new(false));
         flag::register(SIGTERM, Arc::clone(&terminated))?;
         cleanup::register(SIGTERM, vec![SIGTERM])?;
 
