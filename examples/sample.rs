@@ -107,7 +107,7 @@ fn main() {
 
     let keypad = Keypad::new(key_event_sender);
     
-    let mut console = Console::new(graphic_receiver, Box::new(keypad));
+    let mut console = Console::new(graphic_receiver, Box::new(keypad)).unwrap();
     console.run();
     console.join();
     screen_runner.join();

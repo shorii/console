@@ -1,7 +1,7 @@
+use libc;
+
 use crate::keyboard::Keyboard;
 use crate::graphic::Graphic;
-
-use rustbox;
 
 use std::default::Default;
 use std::thread;
@@ -9,6 +9,10 @@ use std::time;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::Error;
+
+use signal_hook::{cleanup, flag, SIGTERM};
 
 use rustbox::{Color, RustBox};
 use rustbox::Key;
@@ -16,11 +20,12 @@ use rustbox::Key;
 pub struct Console {
     renderer: Arc<Renderer>,
     listener: Arc<EventListener>,
-    handles: Vec<thread::JoinHandle<()>>
+    handles: Vec<thread::JoinHandle<()>>,
+    terminated: Arc<AtomicBool>,
 }
 
 impl Console {
-    pub fn new(render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>, keyboard: Box<dyn Keyboard>) -> Self {
+    pub fn new(render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>, keyboard: Box<dyn Keyboard>) -> Result<Self, Error> {
         let rustbox = Arc::new(RustBox::init(Default::default()).unwrap());
 
         let renderer = Renderer::new(
@@ -32,25 +37,30 @@ impl Console {
         let listener = Arc::new(listener);
 
         let handles = Vec::new();
-        Console { renderer, listener, handles }
+
+        let terminated = Arc::new(AtomicBool::new(false));
+        flag::register(SIGTERM, Arc::clone(&terminated))?;
+        cleanup::register(SIGTERM, vec![SIGTERM])?;
+
+        Ok(Console { renderer, listener, handles, terminated })
+    }
+
+    fn run_thread<T>(&mut self, service: Arc<T>) where T: Service + 'static {
+        let terminated = Arc::clone(&self.terminated);
+        let handle = thread::spawn(move || {
+            while !terminated.load(Ordering::Relaxed) {
+                service.run();
+            }
+        });
+        self.handles.push(handle);
     }
 
     pub fn run(&mut self) {
         let renderer = Arc::clone(&self.renderer);
-        let renderer_handle = thread::spawn(move || {
-            loop {
-                renderer.run();
-            }
-        });
-        self.handles.push(renderer_handle);
+        self.run_thread(renderer);
 
         let listener = Arc::clone(&self.listener);
-        let listener_handle = thread::spawn(move || {
-            loop {
-                listener.run();
-            }
-        });
-        self.handles.push(listener_handle);
+        self.run_thread(listener);
     }
 
     pub fn join(self) {
@@ -58,6 +68,10 @@ impl Console {
             handle.join();
         }
     }
+}
+
+trait Service: Send + Sync {
+    fn run(&self);
 }
 
 struct EventListener {
@@ -71,13 +85,20 @@ impl EventListener {
         let listener_thread: Option<thread::JoinHandle<()>> = None;
         EventListener { rustbox, keyboard, listener_thread }
     }
+}
 
+impl Service for EventListener {
     fn run(&self) {
         match self.rustbox.poll_event(false) {
             Ok(rustbox::Event::KeyEvent(key)) => {
                 match key {
                     Key::Char(a) => {
                         self.keyboard.press(a);
+                    },
+                    Key::Esc => {
+                        unsafe {
+                            libc::raise(signal_hook::SIGTERM);
+                        }
                     },
                     _ => {/*do nothing*/}
                 }
@@ -96,7 +117,9 @@ impl Renderer {
     fn new(rustbox: Arc<RustBox>, render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>) -> Self{
         Renderer { rustbox, render_bus }
     }
+}
 
+impl Service for Renderer {
     fn run(&self) {
         let render_bus = self.render_bus.lock().unwrap();
         match render_bus.try_recv() {
