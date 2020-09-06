@@ -1,7 +1,7 @@
-mod keyboard;
-mod graphic;
 mod console;
+mod graphic;
+mod keyboard;
 
-pub use keyboard::Keyboard;
-pub use graphic::Graphic;
 pub use console::Console;
+pub use graphic::Graphic;
+pub use keyboard::Keyboard;

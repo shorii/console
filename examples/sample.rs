@@ -1,21 +1,28 @@
-use console::{Keyboard, Graphic, Console};
+use console::{Console, Graphic, Keyboard};
+use rand::prelude::*;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
-use rand::prelude::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 struct Screen {
     gfx: [u8; 192],
     key_bus: Arc<Mutex<mpsc::Receiver<u8>>>,
-    render_bus: Arc<Mutex<mpsc::Sender<Graphic>>>
+    render_bus: Arc<Mutex<mpsc::Sender<Graphic>>>,
 }
 
 impl Screen {
-    fn new(key_bus: Arc<Mutex<mpsc::Receiver<u8>>>, render_bus: Arc<Mutex<mpsc::Sender<Graphic>>>) -> Self {
-        Screen { gfx: [0; 192], key_bus, render_bus }
+    fn new(
+        key_bus: Arc<Mutex<mpsc::Receiver<u8>>>,
+        render_bus: Arc<Mutex<mpsc::Sender<Graphic>>>,
+    ) -> Self {
+        Screen {
+            gfx: [0; 192],
+            key_bus,
+            render_bus,
+        }
     }
 
     fn run(&self) {
@@ -31,8 +38,12 @@ impl Screen {
                 let end = row_length + offset;
                 let idx = rand::thread_rng().gen_range(begin, end);
                 content[idx] = 1;
-                self.render_bus.lock().unwrap().send(Graphic::new(content, row_length));
-            },
+                self.render_bus
+                    .lock()
+                    .unwrap()
+                    .send(Graphic::new(content, row_length))
+                    .unwrap();
+            }
             _ => {}
         };
     }
@@ -47,7 +58,11 @@ struct ScreenRunner {
 impl ScreenRunner {
     fn new(screen: Screen, terminated: Arc<AtomicBool>) -> Self {
         let handle: Option<thread::JoinHandle<()>> = None;
-        ScreenRunner { inner: Arc::new(screen), handle, terminated }
+        ScreenRunner {
+            inner: Arc::new(screen),
+            handle,
+            terminated,
+        }
     }
 
     fn run(&mut self) {
@@ -62,35 +77,31 @@ impl ScreenRunner {
     }
 
     fn join(self) {
-        self.handle.unwrap().join();
+        self.handle.unwrap().join().unwrap();
     }
 }
 
 struct Keypad {
-    keyMap: HashMap<char, u8>,
+    keymap: HashMap<char, u8>,
     bus: Arc<Mutex<mpsc::Sender<u8>>>,
 }
 
 impl Keypad {
     fn new(bus: Arc<Mutex<mpsc::Sender<u8>>>) -> Self {
-        let map: [(char, u8); 3] = [
-            ('1', 0x1),
-            ('2', 0x2),
-            ('3', 0x3),
-        ];
-        let keyMap = map.iter().cloned().collect::<HashMap<_, _>>();
-        Keypad { keyMap, bus }
+        let map: [(char, u8); 3] = [('1', 0x1), ('2', 0x2), ('3', 0x3)];
+        let keymap = map.iter().cloned().collect::<HashMap<_, _>>();
+        Keypad { keymap, bus }
     }
 }
 
 impl Keyboard for Keypad {
     fn press(&self, key: char) {
-        match self.keyMap.get(&key) {
+        match self.keymap.get(&key) {
             Some(value) => {
                 let bus = self.bus.lock().unwrap();
-                bus.send(*value);
-            },
-            None => {/* do nothing */}
+                bus.send(*value).unwrap();
+            }
+            None => { /* do nothing */ }
         };
     }
 }
@@ -107,16 +118,13 @@ fn main() {
     let graphic_receiver = Arc::new(Mutex::new(graphic_receiver));
 
     let screen = Screen::new(key_event_receiver, graphic_sender);
-    let mut screen_runner = ScreenRunner::new(
-        screen, Arc::clone(&terminated),
-    );
+    let mut screen_runner = ScreenRunner::new(screen, Arc::clone(&terminated));
     screen_runner.run();
 
     let keypad = Keypad::new(key_event_sender);
-    
-    let mut console = Console::new(
-        graphic_receiver, Box::new(keypad), Arc::clone(&terminated),
-    ).unwrap();
+
+    let mut console =
+        Console::new(graphic_receiver, Box::new(keypad), Arc::clone(&terminated)).unwrap();
     console.run();
     console.join();
     screen_runner.join();

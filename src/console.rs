@@ -1,21 +1,20 @@
 use libc;
 
-use crate::keyboard::Keyboard;
 use crate::graphic::Graphic;
+use crate::keyboard::Keyboard;
 
 use std::default::Default;
-use std::thread;
-use std::time;
+use std::io::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::io::Error;
+use std::thread;
 
 use signal_hook::{cleanup, flag, SIGTERM};
 
-use rustbox::{Color, RustBox};
 use rustbox::Key;
+use rustbox::{Color, RustBox};
 
 pub struct Console {
     renderer: Arc<Renderer>,
@@ -28,14 +27,12 @@ impl Console {
     pub fn new(
         render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>,
         keyboard: Box<dyn Keyboard>,
-        terminated: Arc<AtomicBool>
+        terminated: Arc<AtomicBool>,
     ) -> Result<Self, Error> {
         let rustbox = Arc::new(RustBox::init(Default::default()).unwrap());
 
-        let renderer = Renderer::new(
-            Arc::clone(&rustbox),
-            render_bus,
-        ); let renderer = Arc::new(renderer);
+        let renderer = Renderer::new(Arc::clone(&rustbox), render_bus);
+        let renderer = Arc::new(renderer);
 
         let listener = EventListener::new(Arc::clone(&rustbox), keyboard);
         let listener = Arc::new(listener);
@@ -45,10 +42,18 @@ impl Console {
         flag::register(SIGTERM, Arc::clone(&terminated))?;
         cleanup::register(SIGTERM, vec![SIGTERM])?;
 
-        Ok(Console { renderer, listener, handles, terminated })
+        Ok(Console {
+            renderer,
+            listener,
+            handles,
+            terminated,
+        })
     }
 
-    fn run_thread<T>(&mut self, service: Arc<T>) where T: Service + 'static {
+    fn run_thread<T>(&mut self, service: Arc<T>)
+    where
+        T: Service + 'static,
+    {
         let terminated = Arc::clone(&self.terminated);
         let handle = thread::spawn(move || {
             while !terminated.load(Ordering::Relaxed) {
@@ -68,7 +73,7 @@ impl Console {
 
     pub fn join(self) {
         for handle in self.handles.into_iter() {
-            handle.join();
+            handle.join().unwrap();
         }
     }
 }
@@ -80,13 +85,11 @@ trait Service: Send + Sync {
 struct EventListener {
     rustbox: Arc<RustBox>,
     keyboard: Box<dyn Keyboard>,
-    listener_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl EventListener {
-    fn new(rustbox: Arc<RustBox>, keyboard: Box<dyn Keyboard>) -> Self{
-        let listener_thread: Option<thread::JoinHandle<()>> = None;
-        EventListener { rustbox, keyboard, listener_thread }
+    fn new(rustbox: Arc<RustBox>, keyboard: Box<dyn Keyboard>) -> Self {
+        EventListener { rustbox, keyboard }
     }
 }
 
@@ -97,15 +100,13 @@ impl Service for EventListener {
                 match key {
                     Key::Char(a) => {
                         self.keyboard.press(a);
+                    }
+                    Key::Esc => unsafe {
+                        libc::raise(signal_hook::SIGTERM);
                     },
-                    Key::Esc => {
-                        unsafe {
-                            libc::raise(signal_hook::SIGTERM);
-                        }
-                    },
-                    _ => {/*do nothing*/}
+                    _ => { /*do nothing*/ }
                 }
-            },
+            }
             _ => panic!("failed to poll event"),
         }
     }
@@ -117,8 +118,11 @@ struct Renderer {
 }
 
 impl Renderer {
-    fn new(rustbox: Arc<RustBox>, render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>) -> Self{
-        Renderer { rustbox, render_bus }
+    fn new(rustbox: Arc<RustBox>, render_bus: Arc<Mutex<mpsc::Receiver<Graphic>>>) -> Self {
+        Renderer {
+            rustbox,
+            render_bus,
+        }
     }
 }
 
@@ -143,8 +147,8 @@ impl Service for Renderer {
                     }
                 }
                 self.rustbox.present();
-            },
-            Err(_) => {/* do nothing */}
+            }
+            Err(_) => { /* do nothing */ }
         }
     }
 }
